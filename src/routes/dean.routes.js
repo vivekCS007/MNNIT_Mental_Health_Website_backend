@@ -9,6 +9,7 @@ router.get('/analytics', ctrl.getDashboardAnalytics)
 router.get('/statistics', ctrl.getRequestStats)
 router.get('/trends', ctrl.getTrends)
 router.get('/report', ctrl.generateReport)
+router.get('/export', ctrl.exportData)
 router.get('/appointments', ctrl.getAllAppointments)
 
 module.exports = router

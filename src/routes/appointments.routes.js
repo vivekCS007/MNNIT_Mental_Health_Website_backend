@@ -7,6 +7,8 @@ const { authenticate, authorize } = require('../middleware/auth')
 router.use(authenticate, authorize('student', 'faculty', 'staff'))
 
 router.get('/profile', ctrl.getProfile)
+router.get('/counsellors', ctrl.getActiveCounsellors)
+router.get('/availability', ctrl.getAvailability) // must come before /:id
 router.post('/', ctrl.bookAppointment)
 router.get('/', ctrl.getAppointments)
 router.get('/:id', ctrl.getAppointmentById)
