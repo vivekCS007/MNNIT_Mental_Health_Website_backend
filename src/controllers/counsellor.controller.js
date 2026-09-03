@@ -1,5 +1,6 @@
 const { query } = require('../config/db')
 const { asyncHandler } = require('../middleware/errorHandler')
+const { encrypt, decrypt } = require('../utils/encryption')
 
 const APPT_SELECT = `
   SELECT
@@ -42,11 +43,18 @@ const updateProfile = asyncHandler(async (req, res) => {
 // GET /counsellor/appointments/pending  — unassigned or assigned-to-me pending requests
 const getPendingRequests = asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `${APPT_SELECT} WHERE a.status = 'PENDING' AND (a.counsellor_id IS NULL OR a.counsellor_id = $1)
-     ORDER BY a.appointment_date ASC`,
+    `${APPT_SELECT} WHERE a.status = 'PENDING' AND (a.requested_counsellor_id IS NULL OR a.requested_counsellor_id = $1)
+     ORDER BY 
+       CASE WHEN a.requested_counsellor_id = $1 THEN 0 ELSE 1 END ASC,
+       a.appointment_date ASC`,
     [req.user.id]
   )
-  res.json({ success: true, data: rows })
+  const decryptedRows = rows.map(r => ({
+    ...r,
+    action_performed: decrypt(r.action_performed),
+    prescription: decrypt(r.prescription)
+  }))
+  res.json({ success: true, data: decryptedRows })
 })
 
 // GET /counsellor/appointments/solved  — everything this counsellor has actioned
@@ -56,14 +64,22 @@ const getSolvedRequests = asyncHandler(async (req, res) => {
      ORDER BY a.appointment_date DESC`,
     [req.user.id]
   )
-  res.json({ success: true, data: rows })
+  const decryptedRows = rows.map(r => ({
+    ...r,
+    action_performed: decrypt(r.action_performed),
+    prescription: decrypt(r.prescription)
+  }))
+  res.json({ success: true, data: decryptedRows })
 })
 
 // GET /counsellor/appointments/:id
 const getAppointmentById = asyncHandler(async (req, res) => {
   const { rows } = await query(`${APPT_SELECT} WHERE a.request_id = $1`, [req.params.id])
   if (!rows[0]) return res.status(404).json({ success: false, message: 'Appointment not found.' })
-  res.json({ success: true, data: rows[0] })
+  const apt = rows[0]
+  apt.action_performed = decrypt(apt.action_performed)
+  apt.prescription = decrypt(apt.prescription)
+  res.json({ success: true, data: apt })
 })
 
 // PUT /counsellor/appointments/:id   body: { status: 'APPROVED' | 'REJECTED' }
@@ -74,14 +90,20 @@ const updateAppointment = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid status.' })
   }
 
-  const { rows } = await query(
-    `UPDATE appointments SET status = $1, counsellor_id = $2, updated_at = now()
-     WHERE request_id = $3 AND status = 'PENDING' RETURNING request_id`,
-    [status, req.user.id, req.params.id]
-  )
-  if (!rows[0]) return res.status(400).json({ success: false, message: 'Failed to update. Try again.' })
-
-  res.json({ success: true, message: status === 'APPROVED' ? 'Request approved! Student has been notified.' : 'Request rejected.' })
+  try {
+    const { rows } = await query(
+      `UPDATE appointments SET status = $1, counsellor_id = $2, updated_at = now()
+       WHERE request_id = $3 AND status = 'PENDING' RETURNING request_id`,
+      [status, req.user.id, req.params.id]
+    )
+    if (!rows[0]) return res.status(400).json({ success: false, message: 'Failed to update. It may have been taken by someone else or cancelled.' })
+    res.json({ success: true, message: status === 'APPROVED' ? 'Request approved! Student has been notified.' : 'Request rejected.' })
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ success: false, message: 'You already have an appointment booked at this exact time.' })
+    }
+    throw err
+  }
 })
 
 // POST /counsellor/appointments/:id/confirm   body: { action_performed, status } (Complete Session modal)
@@ -92,11 +114,14 @@ const confirmBooking = asyncHandler(async (req, res) => {
   }
   const resolution = ['RESOLVED', 'FOLLOW_UP', 'REFERRED'].includes(status) ? status : 'RESOLVED'
 
+  const encryptedNotes = encrypt(action_performed)
+  const encryptedRx = encrypt(prescription)
+
   const { rows } = await query(
     `UPDATE appointments
      SET status = 'COMPLETED', resolution = $1, action_performed = $2, prescription = COALESCE($3, prescription), counsellor_id = $4, updated_at = now()
      WHERE request_id = $5 RETURNING request_id`,
-    [resolution, action_performed, prescription ?? null, req.user.id, req.params.id]
+    [resolution, encryptedNotes, encryptedRx ?? null, req.user.id, req.params.id]
   )
   if (!rows[0]) return res.status(400).json({ success: false, message: 'Failed to complete. Try again.' })
 
@@ -109,7 +134,12 @@ const getBookerHistory = asyncHandler(async (req, res) => {
     `${APPT_SELECT} WHERE a.booker_id = $1 ORDER BY a.appointment_date DESC, a.request_id DESC`,
     [req.params.bookerId]
   )
-  res.json({ success: true, data: rows })
+  const decryptedRows = rows.map(r => ({
+    ...r,
+    action_performed: decrypt(r.action_performed),
+    prescription: decrypt(r.prescription)
+  }))
+  res.json({ success: true, data: decryptedRows })
 })
 
 // PUT /counsellor/appointments/:id/status   body: { status }
@@ -130,6 +160,9 @@ const updateStatus = asyncHandler(async (req, res) => {
 // PUT /counsellor/appointments/:id/prescription   body: { prescription, action_performed }
 const savePrescription = asyncHandler(async (req, res) => {
   const { prescription, action_performed } = req.body
+  const encryptedRx = encrypt(prescription)
+  const encryptedNotes = encrypt(action_performed)
+
   const { rows } = await query(
     `UPDATE appointments
      SET prescription = COALESCE($1, prescription),
@@ -137,7 +170,7 @@ const savePrescription = asyncHandler(async (req, res) => {
          counsellor_id = $3,
          updated_at = now()
      WHERE request_id = $4 RETURNING request_id`,
-    [prescription ?? null, action_performed ?? null, req.user.id, req.params.id]
+    [encryptedRx ?? null, encryptedNotes ?? null, req.user.id, req.params.id]
   )
   if (!rows[0]) return res.status(400).json({ success: false, message: 'Failed to save prescription.' })
   res.json({ success: true, message: 'Prescription saved.' })

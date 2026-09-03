@@ -32,17 +32,31 @@ const getRequestStats = asyncHandler(async (req, res) => {
 
 // GET /dean/analytics  -> { byBranch, byStatus }
 const getDashboardAnalytics = asyncHandler(async (req, res) => {
-  const byBranch = await query(`
+  const userType = req.query.userType || 'all'
+
+  let branchSql = `
     SELECT COALESCE(u.branch, 'Unspecified') AS branch,
            u.user_type AS booker_type,
            COUNT(*) AS count
     FROM appointments a JOIN users u ON u.id = a.booker_id
-    GROUP BY u.branch, u.user_type
-    ORDER BY branch
-  `)
-  const byStatus = await query(`
-    SELECT status, COUNT(*) AS count FROM appointments GROUP BY status
-  `)
+  `
+  let statusSql = `
+    SELECT a.status, COUNT(*) AS count 
+    FROM appointments a JOIN users u ON u.id = a.booker_id
+  `
+  const params = []
+
+  if (userType !== 'all') {
+    params.push(userType)
+    branchSql += ` WHERE u.user_type = $1`
+    statusSql += ` WHERE u.user_type = $1`
+  }
+
+  branchSql += ` GROUP BY u.branch, u.user_type ORDER BY branch`
+  statusSql += ` GROUP BY a.status`
+
+  const byBranch = await query(branchSql, params)
+  const byStatus = await query(statusSql, params)
 
   res.json({
     success: true,
@@ -122,6 +136,8 @@ const APPT_SELECT = `
     u.user_type AS booker_type,
     u.email AS booker_email,
     u.branch,
+    u.course,
+    u.year,
     c.name AS counsellor_name
   FROM appointments a
   JOIN users u ON u.id = a.booker_id
@@ -131,7 +147,32 @@ const APPT_SELECT = `
 // GET /dean/appointments  -> full list for the monitoring table (read-only)
 const getAllAppointments = asyncHandler(async (req, res) => {
   const { rows } = await query(`${APPT_SELECT} ORDER BY a.appointment_date DESC, a.request_id DESC`)
-  res.json({ success: true, data: rows })
+  const redactedRows = rows.map(r => ({
+    ...r,
+    action_performed: r.action_performed ? '[REDACTED - PRIVACY]' : null,
+    prescription: r.prescription ? '[REDACTED - PRIVACY]' : null
+  }))
+  res.json({ success: true, data: redactedRows })
 })
 
-module.exports = { getRequestStats, getDashboardAnalytics, getTrends, generateReport, getAllAppointments }
+// GET /dean/export?format=csv
+const exportData = asyncHandler(async (req, res) => {
+  const format = req.query.format || 'csv'
+  const { rows } = await query(`${APPT_SELECT} ORDER BY a.appointment_date DESC`)
+
+  if (format !== 'csv') {
+    return res.json({ success: true, data: rows })
+  }
+
+  const header = ['request_id', 'booker_name', 'booker_type', 'registration_number', 'branch', 'course', 'year', 'appointment_date', 'time_slot', 'counsellor_name', 'request_status']
+  const csvLines = [header.join(',')]
+  for (const r of rows) {
+    csvLines.push(header.map((h) => `"${(r[h] ?? '').toString().replace(/"/g, '""')}"`).join(','))
+  }
+
+  res.setHeader('Content-Type', 'text/csv')
+  res.setHeader('Content-Disposition', 'attachment; filename="dean_appointments_export.csv"')
+  res.send(csvLines.join('\n'))
+})
+
+module.exports = { getRequestStats, getDashboardAnalytics, getTrends, generateReport, getAllAppointments, exportData }
