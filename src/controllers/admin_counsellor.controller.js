@@ -97,7 +97,7 @@ const blockSpecificSlot = asyncHandler(async (req, res) => {
       `INSERT INTO appointments (
          booker_id, requested_counsellor_id, counsellor_id, appointment_date, time_slot, status, description
        ) VALUES ($1, $2, $2, $3, $4, 'APPROVED', 'BLOCKED BY ADMIN')
-       RETURNING id, appointment_date, time_slot`,
+       RETURNING request_id, appointment_date, time_slot`,
       [adminId, id, date, time_slot]
     )
     res.status(201).json({ success: true, data: rows[0], message: 'Slot blocked successfully.' })
