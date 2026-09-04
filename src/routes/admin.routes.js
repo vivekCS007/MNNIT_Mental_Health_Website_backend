@@ -1,8 +1,20 @@
 const express = require('express')
+const multer = require('multer')
 const router = express.Router()
 const ctrl = require('../controllers/admin.controller')
 const cmCtrl = require('../controllers/admin_counsellor.controller')
+const siCtrl = require('../controllers/student_import.controller')
 const { authenticate, authorize } = require('../middleware/auth')
+
+// Store uploaded files in memory (buffer), not disk — we process immediately
+const upload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    if (file.originalname.match(/\.xlsx$/i)) cb(null, true)
+    else cb(new Error('Only .xlsx files are allowed'), false)
+  },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
+})
 
 router.use(authenticate, authorize('administrator'))
 
@@ -22,5 +34,9 @@ router.get('/counsellors/:id/schedules', cmCtrl.getCounsellorSchedules)
 router.post('/counsellors/:id/schedules', cmCtrl.addWeeklySchedule)
 router.delete('/counsellors/:id/schedules/:scheduleId', cmCtrl.deleteWeeklySchedule)
 router.post('/counsellors/:id/block-slot', cmCtrl.blockSpecificSlot)
+
+// Student Bulk Import
+router.post('/students/import', upload.single('students_file'), siCtrl.importStudents)
+router.get('/students/template', siCtrl.downloadTemplate)
 
 module.exports = router
