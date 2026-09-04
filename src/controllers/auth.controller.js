@@ -3,6 +3,7 @@ const { query } = require('../config/db')
 const { hashPassword, comparePassword } = require('../utils/password')
 const { signToken } = require('../utils/jwt')
 const { asyncHandler } = require('../middleware/errorHandler')
+const { sendPasswordResetEmail } = require('../utils/mailer')
 
 // POST /auth/login   body: { userType, userId, password }
 const login = asyncHandler(async (req, res) => {
@@ -19,12 +20,12 @@ const login = asyncHandler(async (req, res) => {
   const user = rows[0]
 
   if (!user) {
-    return res.status(401).json({ success: false, message: 'Invalid credentials. Use your DOB as password (DD-MM-YYYY).' })
+    return res.status(401).json({ success: false, message: 'Invalid credentials. Please check your ID and password.' })
   }
 
   const valid = await comparePassword(password.trim(), user.password_hash)
   if (!valid) {
-    return res.status(401).json({ success: false, message: 'Invalid credentials. Use your DOB as password (DD-MM-YYYY).' })
+    return res.status(401).json({ success: false, message: 'Invalid credentials. Please check your ID and password.' })
   }
 
   const token = signToken({ id: user.id, userType: user.user_type, name: user.name })
@@ -59,9 +60,13 @@ const forgotPassword = asyncHandler(async (req, res) => {
       'INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)',
       [user.id, token, expiresAt]
     )
-    // TODO: plug in a real email provider (SendGrid, SES, Nodemailer + SMTP, etc.)
-    // For now this just logs the link so you can test the flow locally.
-    console.log(`Password reset link for user ${user.id}: ${process.env.FRONTEND_ORIGIN}/reset-password?token=${token}`)
+    const resetLink = `${process.env.FRONTEND_ORIGIN}/reset-password?token=${token}`
+    try {
+      await sendPasswordResetEmail(user.email || email, user.name || 'User', resetLink)
+    } catch (mailErr) {
+      console.error('Email send failed:', mailErr.message)
+      // Still respond success so we don't leak user existence
+    }
   }
 
   res.json({ success: true, message: 'Password reset link sent to your email!' })
