@@ -9,6 +9,8 @@ DROP TABLE IF EXISTS appointments CASCADE;
 DROP TABLE IF EXISTS password_resets CASCADE;
 DROP TABLE IF EXISTS emergency_contacts CASCADE;
 DROP TABLE IF EXISTS team_members CASCADE;
+DROP TABLE IF EXISTS events CASCADE;
+DROP TABLE IF EXISTS articles CASCADE;
 DROP TABLE IF EXISTS counsellor_schedules CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
@@ -108,7 +110,34 @@ CREATE TABLE team_members (
   phone          TEXT,
   qualification  TEXT,
   expertise      TEXT,
-  photo_url      TEXT
+  photo_url      TEXT,
+  image_base64   TEXT
+);
+
+CREATE TABLE events (
+  id             SERIAL PRIMARY KEY,
+  title          TEXT NOT NULL,
+  date           TEXT NOT NULL,
+  description    TEXT,
+  guest          TEXT,
+  image_base64   TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE articles (
+  id             TEXT PRIMARY KEY,
+  type           TEXT DEFAULT 'internal',
+  status         TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  title          TEXT NOT NULL,
+  author         TEXT NOT NULL,
+  date           TEXT,
+  excerpt        TEXT,
+  color          TEXT,
+  body           JSONB,
+  submitted_by   TEXT,
+  submitted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at    TIMESTAMPTZ,
+  image_base64   TEXT
 );
 
 CREATE TABLE emergency_contacts (
