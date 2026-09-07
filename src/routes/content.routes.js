@@ -1,5 +1,5 @@
 const express = require('express')
-const { protect, restrictTo } = require('../middleware/auth')
+const { authenticate, authorize } = require('../middleware/auth')
 const {
   getTeamMembers, addTeamMember, updateTeamMember, deleteTeamMember,
   getEvents, addEvent, updateEvent, deleteEvent,
@@ -14,21 +14,21 @@ router.get('/events', getEvents)
 router.get('/articles', getArticles) // optionally pass ?status=approved
 
 // Protected admin routes for Team
-router.post('/team', protect, restrictTo('administrator'), addTeamMember)
-router.put('/team/:id', protect, restrictTo('administrator'), updateTeamMember)
-router.delete('/team/:id', protect, restrictTo('administrator'), deleteTeamMember)
+router.post('/team', authenticate, authorize('administrator'), addTeamMember)
+router.put('/team/:id', authenticate, authorize('administrator'), updateTeamMember)
+router.delete('/team/:id', authenticate, authorize('administrator'), deleteTeamMember)
 
 // Protected admin routes for Events
-router.post('/events', protect, restrictTo('administrator'), addEvent)
-router.put('/events/:id', protect, restrictTo('administrator'), updateEvent)
-router.delete('/events/:id', protect, restrictTo('administrator'), deleteEvent)
+router.post('/events', authenticate, authorize('administrator'), addEvent)
+router.put('/events/:id', authenticate, authorize('administrator'), updateEvent)
+router.delete('/events/:id', authenticate, authorize('administrator'), deleteEvent)
 
 // Protected routes for Articles
 // Anyone logged in can submit an article
-router.post('/articles', protect, submitArticle)
+router.post('/articles', authenticate, submitArticle)
 
 // Only admins can approve/reject or delete articles
-router.put('/articles/:id/status', protect, restrictTo('administrator'), updateArticleStatus)
-router.delete('/articles/:id', protect, restrictTo('administrator'), deleteArticle)
+router.put('/articles/:id/status', authenticate, authorize('administrator'), updateArticleStatus)
+router.delete('/articles/:id', authenticate, authorize('administrator'), deleteArticle)
 
 module.exports = router
