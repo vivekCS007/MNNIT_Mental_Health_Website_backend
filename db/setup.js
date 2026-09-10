@@ -18,7 +18,7 @@ async function run() {
 
     console.log('✅ Database setup complete.')
   } catch (err) {
-    console.error('❌ Database setup failed:', err.message)
+    console.error('❌ Database setup failed:', err.stack || err)
     process.exitCode = 1
   } finally {
     await pool.end()
