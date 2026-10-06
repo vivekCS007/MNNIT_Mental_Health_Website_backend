@@ -4,9 +4,9 @@ const { hashPassword } = require('../utils/password')
 const { asyncHandler } = require('../middleware/errorHandler')
 
 /**
- * POST /admin/students/import
+ * POST /admin/faculty/import
  */
-const importStudents = asyncHandler(async (req, res) => {
+const importFaculty = asyncHandler(async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ success: false, message: 'No file uploaded. Please attach an .xlsx file.' })
   }
@@ -25,7 +25,7 @@ const importStudents = asyncHandler(async (req, res) => {
     Object.fromEntries(Object.entries(r).map(([k, v]) => [normalize(k), String(v).trim()]))
   )
 
-  const REQUIRED = ['registration_number', 'name', 'email', 'password']
+  const REQUIRED = ['employee_id', 'name', 'email', 'password']
   const summary = { imported: 0, updated: 0, skipped: 0, errors: [] }
 
   for (const [idx, row] of rows.entries()) {
@@ -43,49 +43,39 @@ const importStudents = asyncHandler(async (req, res) => {
 
       const { rows: existing } = await query(
         'SELECT id FROM users WHERE identifier = ?',
-        [row.registration_number]
+        [row.employee_id]
       )
-
-      // Get mentor email from column 'mentor' if provided
-      const mentorEmail = row.mentor || null
 
       if (existing.length > 0) {
         await query(
           `UPDATE users SET
-            name = ?, email = ?, password_hash = ?,
-            branch = ?, course = ?, year = ?, mentor_email = ?
+            name = ?, email = ?, password_hash = ?, branch = ?
           WHERE identifier = ?`,
           [
             row.name,
             row.email,
             passwordHash,
-            row.branch || null,
-            row.course || null,
-            row.year || null,
-            mentorEmail,
-            row.registration_number,
+            row.department || null,
+            row.employee_id,
           ]
         )
         summary.updated++
       } else {
         await query(
-          `INSERT INTO users (identifier, name, email, user_type, password_hash, branch, course, year, mentor_email)
-           VALUES (?, ?, ?, 'student', ?, ?, ?, ?, ?)`,
+          `INSERT INTO users (identifier, name, email, user_type, password_hash, branch)
+           VALUES (?, ?, ?, 'faculty', ?, ?)`,
           [
-            row.registration_number,
+            row.employee_id,
             row.name,
             row.email,
             passwordHash,
-            row.branch || null,
-            row.course || null,
-            row.year || null,
-            mentorEmail
+            row.department || null
           ]
         )
         summary.imported++
       }
     } catch (err) {
-      summary.errors.push(`Row ${rowNum} (${row.registration_number}): ${err.message}`)
+      summary.errors.push(`Row ${rowNum} (${row.employee_id}): ${err.message}`)
       summary.skipped++
     }
   }
@@ -98,41 +88,35 @@ const importStudents = asyncHandler(async (req, res) => {
 })
 
 /**
- * GET /admin/students/template
+ * GET /admin/faculty/template
  */
 const downloadTemplate = asyncHandler(async (req, res) => {
   const sampleData = [
     {
-      registration_number: '21BCS001',
-      name: 'Rahul Verma',
-      email: 'rahul.21bcs001@mnnit.ac.in',
+      employee_id: 'FAC001',
+      name: 'Dr. Ravi Sharma',
+      email: 'dr.ravi@mnnit.ac.in',
       password: 'Xyz@2024#Abc',
-      branch: 'Computer Science',
-      course: 'B.Tech',
-      year: '2nd Year',
-      mentor: 'faculty.demo@mnnit.ac.in'
+      department: 'Computer Science',
     },
     {
-      registration_number: '21BCS002',
-      name: 'Priya Sharma',
-      email: 'priya.21bcs002@mnnit.ac.in',
+      employee_id: 'FAC002',
+      name: 'Dr. Anita Desai',
+      email: 'dr.anita@mnnit.ac.in',
       password: 'Pqr@2024#Def',
-      branch: 'Computer Science',
-      course: 'B.Tech',
-      year: '2nd Year',
-      mentor: 'faculty.demo@mnnit.ac.in'
+      department: 'Electrical Engineering',
     },
   ]
 
   const ws = XLSX.utils.json_to_sheet(sampleData)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Students')
+  XLSX.utils.book_append_sheet(wb, ws, 'Faculty')
 
   const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-  res.setHeader('Content-Disposition', 'attachment; filename="student_import_template.xlsx"')
+  res.setHeader('Content-Disposition', 'attachment; filename="faculty_import_template.xlsx"')
   res.send(buffer)
 })
 
-module.exports = { importStudents, downloadTemplate }
+module.exports = { importFaculty, downloadTemplate }

@@ -31,7 +31,7 @@ const getAllRequests = asyncHandler(async (req, res) => {
   let sql = APPT_SELECT
   if (status) {
     params.push(status)
-    sql += ` WHERE a.status = $${params.length}`
+    sql += ` WHERE a.status = ?`
   }
   sql += ' ORDER BY a.appointment_date DESC'
 
@@ -46,7 +46,7 @@ const getAllRequests = asyncHandler(async (req, res) => {
 
 // GET /admin/appointments/:id
 const getRequestById = asyncHandler(async (req, res) => {
-  const { rows } = await query(`${APPT_SELECT} WHERE a.request_id = $1`, [req.params.id])
+  const { rows } = await query(`${APPT_SELECT} WHERE a.request_id = ?`, [req.params.id])
   if (!rows[0]) return res.status(404).json({ success: false, message: 'Not found.' })
   const apt = rows[0]
   apt.action_performed = apt.action_performed ? '[REDACTED - SENSITIVE]' : null
@@ -59,7 +59,7 @@ const searchByRegNo = asyncHandler(async (req, res) => {
   const { regNo } = req.query
   if (!regNo) return res.status(400).json({ success: false, message: 'regNo query param is required.' })
 
-  const { rows } = await query(`${APPT_SELECT} WHERE u.identifier ILIKE $1 ORDER BY a.appointment_date DESC`, [`%${regNo}%`])
+  const { rows } = await query(`${APPT_SELECT} WHERE u.identifier LIKE ? ORDER BY a.appointment_date DESC`, [`%${regNo}%`])
   const redactedRows = rows.map(r => ({
     ...r,
     action_performed: r.action_performed ? '[REDACTED - SENSITIVE]' : null,
@@ -72,16 +72,16 @@ const searchByRegNo = asyncHandler(async (req, res) => {
 const getStatistics = asyncHandler(async (req, res) => {
   const totals = await query(`
     SELECT
-      COUNT(*) FILTER (WHERE true)                    AS "totalRequests",
-      COUNT(*) FILTER (WHERE status = 'PENDING')       AS "pendingRequests",
-      COUNT(*) FILTER (WHERE status = 'COMPLETED')     AS "completedRequests"
+      COUNT(*) AS totalRequests,
+      COUNT(CASE WHEN status = 'PENDING' THEN 1 END) AS pendingRequests,
+      COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completedRequests
     FROM appointments
   `)
   const userStats = await query(`
     SELECT
-      COUNT(*) FILTER (WHERE user_type = 'student') AS "totalStudents",
-      COUNT(*) FILTER (WHERE user_type = 'faculty') AS "totalFaculty",
-      COUNT(*) FILTER (WHERE user_type = 'staff')   AS "totalStaff"
+      COUNT(CASE WHEN user_type = 'student' THEN 1 END) AS totalStudents,
+      COUNT(CASE WHEN user_type = 'faculty' THEN 1 END) AS totalFaculty,
+      COUNT(CASE WHEN user_type = 'staff' THEN 1 END)   AS totalStaff
     FROM users
   `)
 
@@ -164,8 +164,8 @@ const getDashboardAnalytics = asyncHandler(async (req, res) => {
 
   if (userType !== 'all') {
     params.push(userType)
-    branchSql += ` WHERE u.user_type = $1`
-    statusSql += ` WHERE u.user_type = $1`
+    branchSql += ` WHERE u.user_type = ?`
+    statusSql += ` WHERE u.user_type = ?`
   }
 
   branchSql += ` GROUP BY u.branch, u.user_type ORDER BY branch`

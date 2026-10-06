@@ -25,7 +25,7 @@ const APPT_SELECT = `
 // GET /appointments/profile
 const getProfile = asyncHandler(async (req, res) => {
   const { rows } = await query(
-    'SELECT id, name, email, identifier AS registration_number, branch, user_type FROM users WHERE id = $1',
+    'SELECT id, name, email, identifier AS registration_number, branch, user_type FROM users WHERE id = ?',
     [req.user.id]
   )
   res.json({ success: true, data: rows[0] })
@@ -39,21 +39,18 @@ const getActiveCounsellors = asyncHandler(async (req, res) => {
 
 // GET /appointments/availability?counsellorId=...&month=...&year=...
 const getAvailability = asyncHandler(async (req, res) => {
-  const { counsellorId, date } = req.query; // simplified: pass ?date=YYYY-MM-DD or get all
-  // For now, this just returns all active schedules for the requested counsellor
-  // and a list of taken slots on specific dates.
+  const { counsellorId, date } = req.query; 
   
   if (!counsellorId || counsellorId === 'general') {
-    // If general, get all active schedules
-    const schedules = await query(`SELECT * FROM counsellor_schedules WHERE is_active = true`);
+    const schedules = await query(`SELECT * FROM counsellor_schedules WHERE is_active = 1`);
     const taken = await query(`SELECT appointment_date, time_slot FROM appointments WHERE status IN ('PENDING', 'APPROVED')`);
     return res.json({ success: true, data: { schedules: schedules.rows, taken: taken.rows } })
   }
 
-  const schedules = await query(`SELECT * FROM counsellor_schedules WHERE counsellor_id = $1 AND is_active = true`, [counsellorId]);
+  const schedules = await query(`SELECT * FROM counsellor_schedules WHERE counsellor_id = ? AND is_active = 1`, [counsellorId]);
   const taken = await query(
     `SELECT appointment_date, time_slot FROM appointments 
-     WHERE counsellor_id = $1 AND status IN ('PENDING', 'APPROVED')`, 
+     WHERE counsellor_id = ? AND status IN ('PENDING', 'APPROVED')`, 
     [counsellorId]
   );
   
@@ -67,13 +64,13 @@ const bookAppointment = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Please select date and time slot.' })
   }
 
-  // Prevent double-booking the same slot on the same day (any booker, since one counsellor pool)
   const clash = await query(
     `SELECT 1 FROM appointments
-     WHERE appointment_date = $1 AND time_slot = $2 AND booker_id = $3 AND status IN ('PENDING','APPROVED')`,
+     WHERE appointment_date = ? AND time_slot = ? AND booker_id = ? AND status IN ('PENDING','APPROVED')`,
     [appointment_date, time_slot, req.user.id]
   )
-  if (clash.rows.length > 0) {
+  
+  if (Array.isArray(clash.rows) && clash.rows.length > 0) {
     return res.status(409).json({ success: false, message: 'You already have a request for that date/time.' })
   }
 
@@ -82,22 +79,22 @@ const bookAppointment = asyncHandler(async (req, res) => {
   try {
     const { rows } = await query(
       `INSERT INTO appointments (booker_id, requested_counsellor_id, counsellor_id, appointment_date, time_slot, description, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING') RETURNING request_id`,
+       VALUES (?, ?, ?, ?, ?, ?, 'PENDING')`,
       [req.user.id, cid, cid, appointment_date, time_slot, description || null]
     )
-    res.status(201).json({ success: true, message: 'Appointment booked successfully!', request_id: rows[0].request_id })
+    res.status(201).json({ success: true, message: 'Appointment booked successfully!', request_id: rows.insertId })
   } catch (err) {
-    if (err.code === '23505') { // Postgres unique constraint violation
+    if (err.code === 'ER_DUP_ENTRY') { 
       return res.status(409).json({ success: false, message: 'This slot was just taken by someone else! Please choose another.' })
     }
     throw err
   }
 })
 
-// GET /appointments  — only the logged-in user's own appointments
+// GET /appointments
 const getAppointments = asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `${APPT_SELECT} WHERE a.booker_id = $1 ORDER BY a.appointment_date DESC, a.request_id DESC`,
+    `${APPT_SELECT} WHERE a.booker_id = ? ORDER BY a.appointment_date DESC, a.request_id DESC`,
     [req.user.id]
   )
   const decryptedRows = rows.map(r => ({
@@ -110,7 +107,7 @@ const getAppointments = asyncHandler(async (req, res) => {
 
 // GET /appointments/:id
 const getAppointmentById = asyncHandler(async (req, res) => {
-  const { rows } = await query(`${APPT_SELECT} WHERE a.request_id = $1 AND a.booker_id = $2`, [req.params.id, req.user.id])
+  const { rows } = await query(`${APPT_SELECT} WHERE a.request_id = ? AND a.booker_id = ?`, [req.params.id, req.user.id])
   if (!rows[0]) return res.status(404).json({ success: false, message: 'Appointment not found.' })
   const apt = rows[0]
   apt.action_performed = decrypt(apt.action_performed)
@@ -118,15 +115,14 @@ const getAppointmentById = asyncHandler(async (req, res) => {
   res.json({ success: true, data: apt })
 })
 
-// PUT /appointments/:id/cancel — only the owner, only while PENDING
+// PUT /appointments/:id/cancel
 const cancelAppointment = asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `UPDATE appointments SET status = 'REJECTED', updated_at = now()
-     WHERE request_id = $1 AND booker_id = $2 AND status = 'PENDING'
-     RETURNING request_id`,
+    `UPDATE appointments SET status = 'REJECTED'
+     WHERE request_id = ? AND booker_id = ? AND status = 'PENDING'`,
     [req.params.id, req.user.id]
   )
-  if (!rows[0]) {
+  if (rows.affectedRows === 0) {
     return res.status(400).json({ success: false, message: 'Could not cancel. Try again.' })
   }
   res.json({ success: true, message: 'Appointment cancelled.' })

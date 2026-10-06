@@ -4,6 +4,7 @@ const router = express.Router()
 const ctrl = require('../controllers/admin.controller')
 const cmCtrl = require('../controllers/admin_counsellor.controller')
 const siCtrl = require('../controllers/student_import.controller')
+const fiCtrl = require('../controllers/faculty_import.controller')
 const { authenticate, authorize } = require('../middleware/auth')
 
 // Store uploaded files in memory (buffer), not disk — we process immediately
@@ -38,5 +39,9 @@ router.post('/counsellors/:id/block-slot', cmCtrl.blockSpecificSlot)
 // Student Bulk Import
 router.post('/students/import', upload.single('students_file'), siCtrl.importStudents)
 router.get('/students/template', siCtrl.downloadTemplate)
+
+// Faculty Bulk Import
+router.post('/faculty/import', upload.single('faculty_file'), fiCtrl.importFaculty)
+router.get('/faculty/template', fiCtrl.downloadTemplate)
 
 module.exports = router

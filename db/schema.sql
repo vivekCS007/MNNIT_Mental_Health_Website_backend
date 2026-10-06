@@ -1,52 +1,53 @@
 -- ---------------------------------------------------------------------------
--- MHC Database Schema (PostgreSQL)
--- Run with:  psql -U <user> -d mhc_db -f db/schema.sql
--- (or use: npm run db:setup   which runs schema.sql + seed.sql automatically)
+-- MHC Database Schema (MySQL)
 -- ---------------------------------------------------------------------------
 
 -- Clean re-run support (safe to run multiple times in dev)
-DROP TABLE IF EXISTS appointments CASCADE;
-DROP TABLE IF EXISTS password_resets CASCADE;
-DROP TABLE IF EXISTS emergency_contacts CASCADE;
-DROP TABLE IF EXISTS team_members CASCADE;
-DROP TABLE IF EXISTS events CASCADE;
-DROP TABLE IF EXISTS articles CASCADE;
-DROP TABLE IF EXISTS counsellor_schedules CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS appointments;
+DROP TABLE IF EXISTS password_resets;
+DROP TABLE IF EXISTS emergency_contacts;
+DROP TABLE IF EXISTS team_members;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS articles;
+DROP TABLE IF EXISTS counsellor_schedules;
+DROP TABLE IF EXISTS users;
 
 -- ---------------------------------------------------------------------------
--- USERS  (students, faculty, staff, counsellors, administrators, dean)
+-- USERS
 -- ---------------------------------------------------------------------------
 CREATE TABLE users (
-  id                  SERIAL PRIMARY KEY,
-  identifier          TEXT UNIQUE NOT NULL,   -- registration number (student) or official email (others)
-  name                TEXT NOT NULL,
-  email               TEXT,
-  user_type           TEXT NOT NULL CHECK (user_type IN ('student','faculty','staff','counsellor','administrator','dean')),
-  branch              TEXT,                   -- students only
-  course              TEXT,                   -- students only
-  year                TEXT,                   -- students only
-  password_hash       TEXT NOT NULL,          -- bcrypt hash of DOB (DD-MM-YYYY) or chosen password
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                  INT AUTO_INCREMENT PRIMARY KEY,
+  identifier          VARCHAR(255) UNIQUE NOT NULL,
+  name                VARCHAR(255) NOT NULL,
+  email               VARCHAR(255),
+  user_type           ENUM('student','faculty','staff','counsellor','administrator','dean') NOT NULL,
+  branch              VARCHAR(255),
+  course              VARCHAR(255),
+  year                VARCHAR(50),
+  mentor_email        VARCHAR(255),
+  password_hash       VARCHAR(255) NOT NULL,
+  created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_users_user_type ON users(user_type);
+CREATE INDEX idx_users_mentor ON users(mentor_email);
 
 -- ---------------------------------------------------------------------------
--- COUNSELLOR SCHEDULES (Managed by Admin)
+-- COUNSELLOR SCHEDULES
 -- ---------------------------------------------------------------------------
 CREATE TABLE counsellor_schedules (
-  id                  SERIAL PRIMARY KEY,
-  counsellor_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  day_of_week         INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6), -- 0=Sun, 1=Mon, ..., 6=Sat
+  id                  INT AUTO_INCREMENT PRIMARY KEY,
+  counsellor_id       INT NOT NULL,
+  day_of_week         INT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
   start_time          TIME NOT NULL,
   end_time            TIME NOT NULL,
-  slot_duration       INTEGER NOT NULL DEFAULT 30, -- in minutes
-  mode                TEXT NOT NULL CHECK (mode IN ('online', 'offline', 'both')),
-  is_active           BOOLEAN NOT NULL DEFAULT true,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  slot_duration       INT NOT NULL DEFAULT 30,
+  mode                ENUM('online', 'offline', 'both') NOT NULL,
+  is_active           TINYINT(1) NOT NULL DEFAULT 1,
+  created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (counsellor_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_counsellor_schedules_counsellor ON counsellor_schedules(counsellor_id);
@@ -56,19 +57,22 @@ CREATE INDEX idx_counsellor_schedules_day ON counsellor_schedules(day_of_week);
 -- APPOINTMENTS
 -- ---------------------------------------------------------------------------
 CREATE TABLE appointments (
-  request_id          SERIAL PRIMARY KEY,
-  booker_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- student/faculty/staff who booked
-  requested_counsellor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,       -- requested specifically (null = general)
-  counsellor_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,          -- assigned once approved
+  request_id          INT AUTO_INCREMENT PRIMARY KEY,
+  booker_id           INT NOT NULL,
+  requested_counsellor_id INT,
+  counsellor_id        INT,
   appointment_date     DATE NOT NULL,
-  time_slot            TEXT NOT NULL,
+  time_slot            VARCHAR(50) NOT NULL,
   description          TEXT,
-  status               TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','COMPLETED','REJECTED')),
-  action_performed      TEXT,                 -- session notes, filled on completion
-  resolution           TEXT CHECK (resolution IN ('RESOLVED','FOLLOW_UP','REFERRED')),
-  prescription         TEXT,                 -- doctor's prescription / advice, added by counsellor
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+  status               ENUM('PENDING','APPROVED','COMPLETED','REJECTED') NOT NULL DEFAULT 'PENDING',
+  action_performed      TEXT,
+  resolution           ENUM('RESOLVED','FOLLOW_UP','REFERRED'),
+  prescription         TEXT,
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (booker_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (requested_counsellor_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (counsellor_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE INDEX idx_appointments_booker ON appointments(booker_id);
@@ -77,78 +81,73 @@ CREATE INDEX idx_appointments_counsellor ON appointments(counsellor_id);
 CREATE INDEX idx_appointments_status ON appointments(status);
 CREATE INDEX idx_appointments_date ON appointments(appointment_date);
 
--- MUTEX: Prevent overlapping appointments for the same counsellor at the same time slot
--- (Only applies to slots that are PENDING or APPROVED/COMPLETED, rejected ones don't lock the slot)
-CREATE UNIQUE INDEX unique_counsellor_slot 
-ON appointments (counsellor_id, appointment_date, time_slot) 
-WHERE status IN ('PENDING', 'APPROVED', 'COMPLETED') AND counsellor_id IS NOT NULL;
+-- NOTE: MySQL does not support partial unique indexes. Overlapping appointments
+-- need to be checked in application logic (e.g. controllers).
 
 -- ---------------------------------------------------------------------------
--- PASSWORD RESETS  (for /auth/forgot-password + /auth/reset-password)
+-- PASSWORD RESETS
 -- ---------------------------------------------------------------------------
 CREATE TABLE password_resets (
-  id            SERIAL PRIMARY KEY,
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token         TEXT UNIQUE NOT NULL,
-  expires_at    TIMESTAMPTZ NOT NULL,
-  used          BOOLEAN NOT NULL DEFAULT false,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  user_id       INT NOT NULL,
+  token         VARCHAR(255) UNIQUE NOT NULL,
+  expires_at    DATETIME NOT NULL,
+  used          TINYINT(1) NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- ---------------------------------------------------------------------------
--- OPTIONAL: Public content tables (Phase 2 — team page & emergency contacts)
--- Everything else on the public pages (FAQs, articles, events, counselling
--- schedule) still lives in src/data/*.js on the frontend. Add tables the
--- same way if/when you want those editable from a backend too.
+-- OPTIONAL: Public content tables
 -- ---------------------------------------------------------------------------
 CREATE TABLE team_members (
-  id             SERIAL PRIMARY KEY,
-  category       TEXT NOT NULL,     -- e.g. 'Deans', 'Counsellors'
-  name           TEXT NOT NULL,
-  role           TEXT,
-  email          TEXT,
-  phone          TEXT,
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  category       VARCHAR(100) NOT NULL,
+  name           VARCHAR(255) NOT NULL,
+  role           VARCHAR(255),
+  email          VARCHAR(255),
+  phone          VARCHAR(50),
   qualification  TEXT,
   expertise      TEXT,
   photo_url      TEXT,
-  image_base64   TEXT
+  image_base64   LONGTEXT
 );
 
 CREATE TABLE events (
-  id             SERIAL PRIMARY KEY,
-  title          TEXT NOT NULL,
-  date           TEXT NOT NULL,
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  title          VARCHAR(255) NOT NULL,
+  date           VARCHAR(100) NOT NULL,
   description    TEXT,
-  guest          TEXT,
-  image_base64   TEXT,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  guest          VARCHAR(255),
+  image_base64   LONGTEXT,
+  created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE articles (
-  id             TEXT PRIMARY KEY,
-  type           TEXT DEFAULT 'internal',
-  status         TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
-  title          TEXT NOT NULL,
-  author         TEXT NOT NULL,
-  date           TEXT,
+  id             VARCHAR(255) PRIMARY KEY,
+  type           VARCHAR(50) DEFAULT 'internal',
+  status         ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+  title          VARCHAR(255) NOT NULL,
+  author         VARCHAR(255) NOT NULL,
+  date           VARCHAR(100),
   excerpt        TEXT,
-  color          TEXT,
-  body           JSONB,
-  submitted_by   TEXT,
-  submitted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  approved_at    TIMESTAMPTZ,
-  image_base64   TEXT
+  color          VARCHAR(50),
+  body           JSON,
+  submitted_by   VARCHAR(255),
+  submitted_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  approved_at    DATETIME,
+  image_base64   LONGTEXT
 );
 
 CREATE TABLE emergency_contacts (
-  id         SERIAL PRIMARY KEY,
-  category   TEXT NOT NULL,   -- 'heads' | 'rows' | 'contacts'
-  label      TEXT,
-  name       TEXT,
-  role       TEXT,
-  office     TEXT,
-  department TEXT,
-  phone      TEXT,
-  email      TEXT,
-  is_danger  BOOLEAN DEFAULT false
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  category   VARCHAR(100) NOT NULL,
+  label      VARCHAR(255),
+  name       VARCHAR(255),
+  role       VARCHAR(255),
+  office     VARCHAR(255),
+  department VARCHAR(255),
+  phone      VARCHAR(50),
+  email      VARCHAR(255),
+  is_danger  TINYINT(1) DEFAULT 0
 );

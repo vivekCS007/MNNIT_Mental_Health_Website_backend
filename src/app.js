@@ -11,6 +11,7 @@ const adminRoutes = require('./routes/admin.routes')
 const deanRoutes = require('./routes/dean.routes')
 const publicRoutes = require('./routes/public.routes')
 const contentRoutes = require('./routes/content.routes')
+const facultyRoutes = require('./routes/faculty.routes')
 
 const app = express()
 
@@ -46,6 +47,7 @@ app.use('/api/admin', adminRoutes)
 app.use('/api/dean', deanRoutes)
 app.use('/api/public', publicRoutes)
 app.use('/api/content', contentRoutes)
+app.use('/api/faculty', facultyRoutes)
 
 app.use((req, res) => res.status(404).json({ success: false, message: 'Route not found.' }))
 app.use(errorHandler)
