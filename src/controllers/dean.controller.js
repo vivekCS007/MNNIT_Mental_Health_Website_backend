@@ -5,11 +5,11 @@ const { asyncHandler } = require('../middleware/errorHandler')
 const getRequestStats = asyncHandler(async (req, res) => {
   const totals = await query(`
     SELECT
-      COUNT(*) FILTER (WHERE true)                  AS "totalRequests",
-      COUNT(*) FILTER (WHERE status = 'PENDING')    AS "pendingRequests",
-      COUNT(*) FILTER (WHERE status = 'APPROVED')   AS "approvedRequests",
-      COUNT(*) FILTER (WHERE status = 'COMPLETED')  AS "completedRequests",
-      COUNT(*) FILTER (WHERE status = 'REJECTED')   AS "rejectedRequests"
+      COUNT(*) AS totalRequests,
+      COUNT(CASE WHEN status = 'PENDING' THEN 1 END) AS pendingRequests,
+      COUNT(CASE WHEN status = 'APPROVED' THEN 1 END) AS approvedRequests,
+      COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completedRequests,
+      COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) AS rejectedRequests
     FROM appointments
   `)
   const students = await query(`SELECT COUNT(*) AS count FROM users WHERE user_type = 'student'`)
@@ -48,8 +48,8 @@ const getDashboardAnalytics = asyncHandler(async (req, res) => {
 
   if (userType !== 'all') {
     params.push(userType)
-    branchSql += ` WHERE u.user_type = $1`
-    statusSql += ` WHERE u.user_type = $1`
+    branchSql += ` WHERE u.user_type = ?`
+    statusSql += ` WHERE u.user_type = ?`
   }
 
   branchSql += ` GROUP BY u.branch, u.user_type ORDER BY branch`
@@ -74,27 +74,27 @@ const getTrends = asyncHandler(async (req, res) => {
   let sql
   if (period === 'week') {
     sql = `
-      SELECT to_char(date_trunc('week', appointment_date), 'DD Mon') AS label, COUNT(*) AS count
+      SELECT DATE_FORMAT(appointment_date, '%d %b') AS label, COUNT(*) AS count
       FROM appointments
-      WHERE appointment_date >= CURRENT_DATE - INTERVAL '12 weeks'
-      GROUP BY 1, date_trunc('week', appointment_date)
-      ORDER BY date_trunc('week', appointment_date)
+      WHERE appointment_date >= CURDATE() - INTERVAL 12 WEEK
+      GROUP BY label, YEARWEEK(appointment_date)
+      ORDER BY YEARWEEK(appointment_date)
     `
   } else if (period === 'year') {
     sql = `
-      SELECT to_char(date_trunc('year', appointment_date), 'YYYY') AS label, COUNT(*) AS count
+      SELECT DATE_FORMAT(appointment_date, '%Y') AS label, COUNT(*) AS count
       FROM appointments
-      WHERE appointment_date >= CURRENT_DATE - INTERVAL '5 years'
-      GROUP BY 1, date_trunc('year', appointment_date)
-      ORDER BY date_trunc('year', appointment_date)
+      WHERE appointment_date >= CURDATE() - INTERVAL 5 YEAR
+      GROUP BY label, YEAR(appointment_date)
+      ORDER BY YEAR(appointment_date)
     `
   } else {
     sql = `
-      SELECT to_char(date_trunc('month', appointment_date), 'Mon YYYY') AS label, COUNT(*) AS count
+      SELECT DATE_FORMAT(appointment_date, '%b %Y') AS label, COUNT(*) AS count
       FROM appointments
-      WHERE appointment_date >= CURRENT_DATE - INTERVAL '12 months'
-      GROUP BY 1, date_trunc('month', appointment_date)
-      ORDER BY date_trunc('month', appointment_date)
+      WHERE appointment_date >= CURDATE() - INTERVAL 12 MONTH
+      GROUP BY label, DATE_FORMAT(appointment_date, '%Y-%m')
+      ORDER BY DATE_FORMAT(appointment_date, '%Y-%m')
     `
   }
 
@@ -112,7 +112,7 @@ const generateReport = asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT a.request_id, a.appointment_date, a.status, u.branch
      FROM appointments a JOIN users u ON u.id = a.booker_id
-     WHERE a.appointment_date BETWEEN $1 AND $2
+     WHERE a.appointment_date BETWEEN ? AND ?
      ORDER BY a.appointment_date`,
     [startDate, endDate]
   )
@@ -120,7 +120,7 @@ const generateReport = asyncHandler(async (req, res) => {
   res.json({ success: true, data: rows })
 })
 
-// Generalized appointments select (same shape the admin/counsellor use)
+// Generalized appointments select
 const APPT_SELECT = `
   SELECT
     a.request_id,
@@ -144,7 +144,7 @@ const APPT_SELECT = `
   LEFT JOIN users c ON c.id = a.counsellor_id
 `
 
-// GET /dean/appointments  -> full list for the monitoring table (read-only)
+// GET /dean/appointments
 const getAllAppointments = asyncHandler(async (req, res) => {
   const { rows } = await query(`${APPT_SELECT} ORDER BY a.appointment_date DESC, a.request_id DESC`)
   const redactedRows = rows.map(r => ({

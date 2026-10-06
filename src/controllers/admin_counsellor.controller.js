@@ -26,13 +26,15 @@ const createCounsellor = asyncHandler(async (req, res) => {
   try {
     const { rows } = await query(
       `INSERT INTO users (name, email, password_hash, identifier, branch, user_type)
-       VALUES ($1, $2, $3, $4, $5, 'counsellor')
-       RETURNING id, name, email, identifier, branch, user_type, created_at`,
+       VALUES (?, ?, ?, ?, ?, 'counsellor')`,
       [name, email, hashedPassword, identifier || email, branch || null]
     )
-    res.status(201).json({ success: true, data: rows[0] })
+    
+    // Fetch newly created
+    const { rows: newlyCreated } = await query('SELECT id, name, email, identifier, branch, user_type, created_at FROM users WHERE id = ?', [rows.insertId])
+    res.status(201).json({ success: true, data: newlyCreated[0] })
   } catch (error) {
-    if (error.code === '23505') { // Unique violation
+    if (error.code === 'ER_DUP_ENTRY') { // Unique violation in MySQL
       return res.status(409).json({ success: false, message: 'User with this email or identifier already exists.' })
     }
     throw error
@@ -43,7 +45,7 @@ const createCounsellor = asyncHandler(async (req, res) => {
 const getCounsellorSchedules = asyncHandler(async (req, res) => {
   const { id } = req.params
   const { rows } = await query(
-    `SELECT * FROM counsellor_schedules WHERE counsellor_id = $1 ORDER BY day_of_week ASC, start_time ASC`,
+    `SELECT * FROM counsellor_schedules WHERE counsellor_id = ? ORDER BY day_of_week ASC, start_time ASC`,
     [id]
   )
   res.json({ success: true, data: rows })
@@ -60,22 +62,23 @@ const addWeeklySchedule = asyncHandler(async (req, res) => {
 
   const { rows } = await query(
     `INSERT INTO counsellor_schedules (counsellor_id, day_of_week, start_time, end_time, slot_duration, mode)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [id, day_of_week, start_time, end_time, slot_duration || 30, mode || 'offline']
   )
-  res.status(201).json({ success: true, data: rows[0] })
+  
+  const { rows: newlyCreated } = await query('SELECT * FROM counsellor_schedules WHERE id = ?', [rows.insertId])
+  res.status(201).json({ success: true, data: newlyCreated[0] })
 })
 
 // DELETE /admin/counsellors/:id/schedules/:scheduleId
 const deleteWeeklySchedule = asyncHandler(async (req, res) => {
   const { id, scheduleId } = req.params
-  const { rowCount } = await query(
-    `DELETE FROM counsellor_schedules WHERE id = $1 AND counsellor_id = $2`,
+  const { rows } = await query(
+    `DELETE FROM counsellor_schedules WHERE id = ? AND counsellor_id = ?`,
     [scheduleId, id]
   )
   
-  if (rowCount === 0) {
+  if (rows.affectedRows === 0) {
     return res.status(404).json({ success: false, message: 'Schedule not found or does not belong to this counsellor.' })
   }
   
@@ -96,13 +99,14 @@ const blockSpecificSlot = asyncHandler(async (req, res) => {
     const { rows } = await query(
       `INSERT INTO appointments (
          booker_id, requested_counsellor_id, counsellor_id, appointment_date, time_slot, status, description
-       ) VALUES ($1, $2, $2, $3, $4, 'APPROVED', 'BLOCKED BY ADMIN')
-       RETURNING request_id, appointment_date, time_slot`,
-      [adminId, id, date, time_slot]
+       ) VALUES (?, ?, ?, ?, ?, 'APPROVED', 'BLOCKED BY ADMIN')`,
+      [adminId, id, id, date, time_slot]
     )
-    res.status(201).json({ success: true, data: rows[0], message: 'Slot blocked successfully.' })
+    
+    const { rows: newlyCreated } = await query('SELECT request_id, appointment_date, time_slot FROM appointments WHERE request_id = ?', [rows.insertId])
+    res.status(201).json({ success: true, data: newlyCreated[0], message: 'Slot blocked successfully.' })
   } catch (error) {
-    if (error.code === '23505') { // Unique violation (slot already taken or blocked)
+    if (error.code === 'ER_DUP_ENTRY') { 
       return res.status(409).json({ success: false, message: 'This slot is already booked or blocked.' })
     }
     throw error
