@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/errorHandler')
 
 /**
  * POST /admin/faculty/import
+ * Uses batched parallel processing — same strategy as student import to handle large files.
  */
 const importFaculty = asyncHandler(async (req, res) => {
   if (!req.file) {
@@ -28,56 +29,70 @@ const importFaculty = asyncHandler(async (req, res) => {
   const REQUIRED = ['employee_id', 'name', 'email', 'password']
   const summary = { imported: 0, updated: 0, skipped: 0, errors: [] }
 
-  for (const [idx, row] of rows.entries()) {
-    const rowNum = idx + 2 
+  // Pre-hash unique passwords in parallel
+  const uniquePasswords = [...new Set(rows.map(r => r.password).filter(Boolean))]
+  const hashCache = {}
+  await Promise.all(
+    uniquePasswords.map(async (pwd) => {
+      hashCache[pwd] = await hashPassword(pwd)
+    })
+  )
 
-    const missing = REQUIRED.filter(f => !row[f])
-    if (missing.length > 0) {
-      summary.skipped++
-      summary.errors.push(`Row ${rowNum}: Missing required fields: ${missing.join(', ')}`)
-      continue
-    }
+  // Process in parallel chunks of 50
+  const CHUNK_SIZE = 50
+  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + CHUNK_SIZE)
+    await Promise.all(chunk.map(async (row, chunkIdx) => {
+      const rowNum = i + chunkIdx + 2
 
-    try {
-      const passwordHash = await hashPassword(row.password)
-
-      const { rows: existing } = await query(
-        'SELECT id FROM users WHERE identifier = ?',
-        [row.employee_id]
-      )
-
-      if (existing.length > 0) {
-        await query(
-          `UPDATE users SET
-            name = ?, email = ?, password_hash = ?, branch = ?
-          WHERE identifier = ?`,
-          [
-            row.name,
-            row.email,
-            passwordHash,
-            row.department || null,
-            row.employee_id,
-          ]
-        )
-        summary.updated++
-      } else {
-        await query(
-          `INSERT INTO users (identifier, name, email, user_type, password_hash, branch)
-           VALUES (?, ?, ?, 'faculty', ?, ?)`,
-          [
-            row.employee_id,
-            row.name,
-            row.email,
-            passwordHash,
-            row.department || null
-          ]
-        )
-        summary.imported++
+      const missing = REQUIRED.filter(f => !row[f])
+      if (missing.length > 0) {
+        summary.skipped++
+        summary.errors.push(`Row ${rowNum}: Missing required fields: ${missing.join(', ')}`)
+        return
       }
-    } catch (err) {
-      summary.errors.push(`Row ${rowNum} (${row.employee_id}): ${err.message}`)
-      summary.skipped++
-    }
+
+      try {
+        const passwordHash = hashCache[row.password]
+
+        const { rows: existing } = await query(
+          'SELECT id FROM users WHERE identifier = ?',
+          [row.employee_id]
+        )
+
+        if (existing.length > 0) {
+          await query(
+            `UPDATE users SET
+              name = ?, email = ?, password_hash = ?, branch = ?
+            WHERE identifier = ?`,
+            [
+              row.name,
+              row.email,
+              passwordHash,
+              row.department || null,
+              row.employee_id,
+            ]
+          )
+          summary.updated++
+        } else {
+          await query(
+            `INSERT INTO users (identifier, name, email, user_type, password_hash, branch)
+             VALUES (?, ?, ?, 'faculty', ?, ?)`,
+            [
+              row.employee_id,
+              row.name,
+              row.email,
+              passwordHash,
+              row.department || null
+            ]
+          )
+          summary.imported++
+        }
+      } catch (err) {
+        summary.errors.push(`Row ${rowNum} (${row.employee_id}): ${err.message}`)
+        summary.skipped++
+      }
+    }))
   }
 
   res.json({
@@ -86,6 +101,7 @@ const importFaculty = asyncHandler(async (req, res) => {
     summary,
   })
 })
+
 
 /**
  * GET /admin/faculty/template

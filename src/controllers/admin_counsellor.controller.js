@@ -113,11 +113,38 @@ const blockSpecificSlot = asyncHandler(async (req, res) => {
   }
 })
 
+// DELETE /admin/counsellors/:id
+const deleteCounsellor = asyncHandler(async (req, res) => {
+  const { id } = req.params
+
+  // Check counsellor exists
+  const { rows: userRows } = await query(
+    `SELECT id, name FROM users WHERE id = ? AND user_type = 'counsellor'`,
+    [id]
+  )
+  if (userRows.length === 0) {
+    return res.status(404).json({ success: false, message: 'Counsellor not found.' })
+  }
+
+  // Nullify all appointments referencing this counsellor so we don't violate FK constraints
+  await query(`UPDATE appointments SET counsellor_id = NULL WHERE counsellor_id = ?`, [id])
+  await query(`UPDATE appointments SET requested_counsellor_id = NULL WHERE requested_counsellor_id = ?`, [id])
+
+  // Delete schedules
+  await query(`DELETE FROM counsellor_schedules WHERE counsellor_id = ?`, [id])
+
+  // Delete the counsellor user record
+  await query(`DELETE FROM users WHERE id = ?`, [id])
+
+  res.json({ success: true, message: `Counsellor "${userRows[0].name}" deleted successfully.` })
+})
+
 module.exports = {
   getAllCounsellors,
   createCounsellor,
   getCounsellorSchedules,
   addWeeklySchedule,
   deleteWeeklySchedule,
-  blockSpecificSlot
+  blockSpecificSlot,
+  deleteCounsellor
 }
