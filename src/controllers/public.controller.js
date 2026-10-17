@@ -7,6 +7,18 @@ const getTeamMembers = asyncHandler(async (req, res) => {
   res.json({ success: true, data: rows })
 })
 
+// GET /public/counsellors
+// Returns all counsellors listed in the system (safe, no sensitive data).
+const getCounsellors = asyncHandler(async (req, res) => {
+  const { rows } = await query(`
+    SELECT id, name, email, branch
+    FROM users
+    WHERE user_type = 'counsellor'
+    ORDER BY name ASC
+  `)
+  res.json({ success: true, data: rows })
+})
+
 // GET /public/emergency-contacts
 const getEmergencyContacts = asyncHandler(async (req, res) => {
   const { rows } = await query('SELECT * FROM emergency_contacts ORDER BY category')
@@ -26,4 +38,4 @@ const getResources = asyncHandler(async (req, res) => {
   res.json({ success: true, data: [], message: 'Not yet migrated from static frontend content.' })
 })
 
-module.exports = { getTeamMembers, getEmergencyContacts, getServices, getResources }
+module.exports = { getTeamMembers, getCounsellors, getEmergencyContacts, getServices, getResources }

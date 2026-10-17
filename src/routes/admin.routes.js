@@ -29,6 +29,7 @@ router.get('/export', ctrl.exportData)
 // Counsellor Management
 router.get('/counsellors', cmCtrl.getAllCounsellors)
 router.post('/counsellors', cmCtrl.createCounsellor)
+router.delete('/counsellors/:id', cmCtrl.deleteCounsellor)
 
 // Schedule Management
 router.get('/counsellors/:id/schedules', cmCtrl.getCounsellorSchedules)

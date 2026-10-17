@@ -5,6 +5,9 @@ const { asyncHandler } = require('../middleware/errorHandler')
 
 /**
  * POST /admin/students/import
+ * Handles large sheets (6000+ rows) without timing out by:
+ *  1. Pre-hashing unique passwords in parallel (bcrypt is slow — batch it once per unique password)
+ *  2. Processing DB upserts in parallel chunks of 50
  */
 const importStudents = asyncHandler(async (req, res) => {
   if (!req.file) {
@@ -28,66 +31,80 @@ const importStudents = asyncHandler(async (req, res) => {
   const REQUIRED = ['registration_number', 'name', 'email', 'password']
   const summary = { imported: 0, updated: 0, skipped: 0, errors: [] }
 
-  for (const [idx, row] of rows.entries()) {
-    const rowNum = idx + 2 
+  // --- Step 1: Pre-hash all unique passwords in parallel ---
+  // This is the critical optimisation — bcrypt.hash takes ~100ms each.
+  // Without this, 6000 rows × 100ms = 10 minutes. With this, we hash once per unique password.
+  const uniquePasswords = [...new Set(rows.map(r => r.password).filter(Boolean))]
+  const hashCache = {}
+  await Promise.all(
+    uniquePasswords.map(async (pwd) => {
+      hashCache[pwd] = await hashPassword(pwd)
+    })
+  )
 
-    const missing = REQUIRED.filter(f => !row[f])
-    if (missing.length > 0) {
-      summary.skipped++
-      summary.errors.push(`Row ${rowNum}: Missing required fields: ${missing.join(', ')}`)
-      continue
-    }
+  // --- Step 2: Process rows in parallel chunks of 50 ---
+  const CHUNK_SIZE = 50
+  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + CHUNK_SIZE)
+    await Promise.all(chunk.map(async (row, chunkIdx) => {
+      const rowNum = i + chunkIdx + 2
 
-    try {
-      const passwordHash = await hashPassword(row.password)
-
-      const { rows: existing } = await query(
-        'SELECT id FROM users WHERE identifier = ?',
-        [row.registration_number]
-      )
-
-      // Get mentor email from column 'mentor' if provided
-      const mentorEmail = row.mentor || null
-
-      if (existing.length > 0) {
-        await query(
-          `UPDATE users SET
-            name = ?, email = ?, password_hash = ?,
-            branch = ?, course = ?, year = ?, mentor_email = ?
-          WHERE identifier = ?`,
-          [
-            row.name,
-            row.email,
-            passwordHash,
-            row.branch || null,
-            row.course || null,
-            row.year || null,
-            mentorEmail,
-            row.registration_number,
-          ]
-        )
-        summary.updated++
-      } else {
-        await query(
-          `INSERT INTO users (identifier, name, email, user_type, password_hash, branch, course, year, mentor_email)
-           VALUES (?, ?, ?, 'student', ?, ?, ?, ?, ?)`,
-          [
-            row.registration_number,
-            row.name,
-            row.email,
-            passwordHash,
-            row.branch || null,
-            row.course || null,
-            row.year || null,
-            mentorEmail
-          ]
-        )
-        summary.imported++
+      const missing = REQUIRED.filter(f => !row[f])
+      if (missing.length > 0) {
+        summary.skipped++
+        summary.errors.push(`Row ${rowNum}: Missing required fields: ${missing.join(', ')}`)
+        return
       }
-    } catch (err) {
-      summary.errors.push(`Row ${rowNum} (${row.registration_number}): ${err.message}`)
-      summary.skipped++
-    }
+
+      try {
+        const passwordHash = hashCache[row.password]
+        const mentorEmail = row.mentor || null
+
+        const { rows: existing } = await query(
+          'SELECT id FROM users WHERE identifier = ?',
+          [row.registration_number]
+        )
+
+        if (existing.length > 0) {
+          await query(
+            `UPDATE users SET
+              name = ?, email = ?, password_hash = ?,
+              branch = ?, course = ?, year = ?, mentor_email = ?
+            WHERE identifier = ?`,
+            [
+              row.name,
+              row.email,
+              passwordHash,
+              row.branch || null,
+              row.course || null,
+              row.year || null,
+              mentorEmail,
+              row.registration_number,
+            ]
+          )
+          summary.updated++
+        } else {
+          await query(
+            `INSERT INTO users (identifier, name, email, user_type, password_hash, branch, course, year, mentor_email)
+             VALUES (?, ?, ?, 'student', ?, ?, ?, ?, ?)`,
+            [
+              row.registration_number,
+              row.name,
+              row.email,
+              passwordHash,
+              row.branch || null,
+              row.course || null,
+              row.year || null,
+              mentorEmail
+            ]
+          )
+          summary.imported++
+        }
+      } catch (err) {
+        summary.errors.push(`Row ${rowNum} (${row.registration_number}): ${err.message}`)
+        summary.skipped++
+      }
+    }))
   }
 
   res.json({
@@ -96,6 +113,7 @@ const importStudents = asyncHandler(async (req, res) => {
     summary,
   })
 })
+
 
 /**
  * GET /admin/students/template
